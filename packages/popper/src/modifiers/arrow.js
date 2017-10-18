@@ -2,6 +2,8 @@ import getClientRect from '../utils/getClientRect';
 import getOuterSizes from '../utils/getOuterSizes';
 import isModifierRequired from '../utils/isModifierRequired';
 import getStyleComputedProperty from '../utils/getStyleComputedProperty';
+import getPopperBorderRadiusSize from '../utils/getPopperBorderRadiusSize';
+import getOppositePlacement from '../utils/getOppositePlacement';
 
 /**
  * @function
@@ -11,78 +13,112 @@ import getStyleComputedProperty from '../utils/getStyleComputedProperty';
  * @returns {Object} The data object, properly modified
  */
 export default function arrow(data, options) {
-  // arrow depends on keepTogether in order to work
-  if (!isModifierRequired(data.instance.modifiers, 'arrow', 'keepTogether')) {
+    // arrow depends on keepTogether in order to work
+    if (!isModifierRequired(data.instance.modifiers, 'arrow', 'keepTogether')) {
+        return data;
+    }
+
+    let arrowElement = options.element;
+
+    // if arrowElement is a string, suppose it's a CSS selector
+    if (typeof arrowElement === 'string') {
+        arrowElement = data.instance.popper.querySelector(arrowElement);
+
+        // if arrowElement is not found, don't run the modifier
+        if (!arrowElement) {
+            return data;
+        }
+    } else {
+        // if the arrowElement isn't a query selector we must check that the
+        // provided DOM node is child of its popper node
+        if (!data.instance.popper.contains(arrowElement)) {
+            console.warn(
+                'WARNING: `arrow.element` must be child of its popper element!'
+            );
+            return data;
+        }
+    }
+
+    const placement = data.placement.split('-')[0];
+    const { popper, reference } = data.offsets;
+    const isVertical = ['left', 'right'].indexOf(placement) !== -1;
+
+    const len = isVertical ? 'height' : 'width';
+    const sideCapitalized = isVertical ? 'Top' : 'Left';
+    const side = sideCapitalized.toLowerCase();
+    const altSide = isVertical ? 'left' : 'top';
+    const opSide = isVertical ? 'bottom' : 'right';
+    const arrowElementSize = getOuterSizes(arrowElement)[len];
+
+    //
+    // extends keepTogether behavior making sure the popper and its
+    // reference have enough pixels in conjuction
+    //
+
+    // top/left side
+    if (reference[opSide] - arrowElementSize < popper[side]) {
+        data.offsets.popper[side] -=
+            popper[side] - (reference[opSide] - arrowElementSize);
+    }
+    // bottom/right side
+    if (reference[side] + arrowElementSize > popper[opSide]) {
+        data.offsets.popper[side] +=
+            reference[side] + arrowElementSize - popper[opSide];
+    }
+
+    // compute center of the popper
+    const center = reference[side] + reference[len] / 2 - arrowElementSize / 2;
+
+    // Compute the sideValue using the updated popper offsets
+    // take popper margin in account because we don't have this info available
+    const popperMarginSide = getStyleComputedProperty(
+        data.instance.popper,
+        `margin${sideCapitalized}`
+    ).replace('px', '');
+    let sideValue =
+        center - getClientRect(data.offsets.popper)[side] - popperMarginSide;
+
+    const styles = getStyleComputedProperty(data.instance.popper);
+    const opSideCapitalized = isVertical ? 'Bottom' : 'Right';
+    const placementOpposite = getOppositePlacement(placement);
+    const placementOppositeCapitalized = placementOpposite.substring(0, 1).toUpperCase() + placementOpposite.substring(1).toLowerCase();
+    const variation = data.placement.split('-')[1] || '';
+    let popperBorderRadiusSide = 0;
+    let popperBorderRadiusOpSide = 0;
+
+    if (isVertical) {
+        popperBorderRadiusSide = getStyleComputedProperty(data.instance.popper, 'border' + sideCapitalized + placementOppositeCapitalized + 'Radius');
+        popperBorderRadiusOpSide = getStyleComputedProperty(data.instance.popper, 'border' + opSideCapitalized + placementOppositeCapitalized + 'Radius');
+    } else {
+        popperBorderRadiusSide = getStyleComputedProperty(data.instance.popper, 'border' + placementOppositeCapitalized + sideCapitalized + 'Radius');
+        popperBorderRadiusOpSide = getStyleComputedProperty(data.instance.popper, 'border' + placementOppositeCapitalized + opSideCapitalized + 'Radius');
+    }
+
+    let popperBorderRadiusSideSize = getPopperBorderRadiusSize(data.instance.popper, popperBorderRadiusSide);
+    let popperBorderRadiusOpSideSize = getPopperBorderRadiusSize(data.instance.popper, popperBorderRadiusOpSide);
+
+    // Follow https://drafts.csswg.org/css-backgrounds-3/#corner-overlap
+    // var f = Li/Si, where i ∈ {top, right, bottom, left},
+    // Si is the sum of the two corresponding radii of the corners on side i,
+    // and Ltop = Lbottom = the width of the box, and Lleft = Lright = the height of the box.
+    // If f < 1, then all corner radii are reduced by multiplying them by f.
+    let f = popper[len] / ( parseInt(popperBorderRadiusSideSize[len]) + parseInt(popperBorderRadiusOpSideSize[len]));
+    f = parseFloat(f);
+
+    var popperBorderRadius = popperBorderRadiusSideSize[len];
+    if (variation === 'start') {
+        popperBorderRadius = popperBorderRadiusOpSideSize[len];
+    }
+
+    popperBorderRadius = f < 1 ? Math.round(popperBorderRadius * f) : popperBorderRadius;
+
+    // prevent arrowElement from being placed not contiguously to its popper
+    sideValue = Math.max(Math.min(popper[len] - arrowElementSize - popperBorderRadius, sideValue), Math.min(popper[len] / 2, popperBorderRadius - arrowElementSize / 2));
+
+    data.arrowElement = arrowElement;
+    data.offsets.arrow = {};
+    data.offsets.arrow[side] = Math.round(sideValue);
+    data.offsets.arrow[altSide] = ''; // make sure to unset any eventual altSide value from the DOM node
+
     return data;
-  }
-
-  let arrowElement = options.element;
-
-  // if arrowElement is a string, suppose it's a CSS selector
-  if (typeof arrowElement === 'string') {
-    arrowElement = data.instance.popper.querySelector(arrowElement);
-
-    // if arrowElement is not found, don't run the modifier
-    if (!arrowElement) {
-      return data;
-    }
-  } else {
-    // if the arrowElement isn't a query selector we must check that the
-    // provided DOM node is child of its popper node
-    if (!data.instance.popper.contains(arrowElement)) {
-      console.warn(
-        'WARNING: `arrow.element` must be child of its popper element!'
-      );
-      return data;
-    }
-  }
-
-  const placement = data.placement.split('-')[0];
-  const { popper, reference } = data.offsets;
-  const isVertical = ['left', 'right'].indexOf(placement) !== -1;
-
-  const len = isVertical ? 'height' : 'width';
-  const sideCapitalized = isVertical ? 'Top' : 'Left';
-  const side = sideCapitalized.toLowerCase();
-  const altSide = isVertical ? 'left' : 'top';
-  const opSide = isVertical ? 'bottom' : 'right';
-  const arrowElementSize = getOuterSizes(arrowElement)[len];
-
-  //
-  // extends keepTogether behavior making sure the popper and its
-  // reference have enough pixels in conjuction
-  //
-
-  // top/left side
-  if (reference[opSide] - arrowElementSize < popper[side]) {
-    data.offsets.popper[side] -=
-      popper[side] - (reference[opSide] - arrowElementSize);
-  }
-  // bottom/right side
-  if (reference[side] + arrowElementSize > popper[opSide]) {
-    data.offsets.popper[side] +=
-      reference[side] + arrowElementSize - popper[opSide];
-  }
-
-  // compute center of the popper
-  const center = reference[side] + reference[len] / 2 - arrowElementSize / 2;
-
-  // Compute the sideValue using the updated popper offsets
-  // take popper margin in account because we don't have this info available
-  const popperMarginSide = getStyleComputedProperty(
-    data.instance.popper,
-    `margin${sideCapitalized}`
-  ).replace('px', '');
-  let sideValue =
-    center - getClientRect(data.offsets.popper)[side] - popperMarginSide;
-
-  // prevent arrowElement from being placed not contiguously to its popper
-  sideValue = Math.max(Math.min(popper[len] - arrowElementSize, sideValue), 0);
-
-  data.arrowElement = arrowElement;
-  data.offsets.arrow = {};
-  data.offsets.arrow[side] = Math.round(sideValue);
-  data.offsets.arrow[altSide] = ''; // make sure to unset any eventual altSide value from the DOM node
-
-  return data;
 }
